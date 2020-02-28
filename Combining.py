@@ -475,8 +475,11 @@ def synchronize(data_objects, t_zero=None, append=None, file_number_type=None,
             # processing: ensuring unique column names for non-appended data
             else:
                 if col in combined_data:
-                    print('conflicting versions of ' + col + '. adding subscripts.')
-                    col = col + '_' + str(nd)
+                    if len(combined_data[col]) == 0:
+                        print(col + ' in multiple datasets. Overwriting an empty one!')
+                    else:
+                        print('conflicting versions of ' + col + '. adding subscripts.')
+                        col = col + '_' + str(nd)
 
             # ---- put the processed data into combined_data! ----
             combined_data[col] = data
@@ -542,7 +545,7 @@ def synchronize(data_objects, t_zero=None, append=None, file_number_type=None,
                 print('copying Ewe/V to <Ewe>/V to keep the latter the right length.')
             else:
                 filler = np.array([0] * (l0 - l1))
-            print('Filling column ' + col + ' to keep in line with timecol ' + timecol + '!!!') # debugging
+            #print('Filling column ' + col + ' to keep in line with timecol ' + timecol + '!!!') # debugging
 
             combined_data[col] = np.append(combined_data[col], filler)
 
@@ -667,6 +670,11 @@ def cut_dataset(dataset_0, tspan=None, tspan_0=None, time_masks=None,
     # ^ use this in loop to avoid a "Set changed size during iteration" RuntimeError
     for col in data_cols:
         timecol = get_timecol(col, dataset)
+        if timecol not in dataset:
+            print('Warning!!! can\'t cut ' + col + ' because dataset doesn\'t have timecol ' + timecol)
+            purge_column(dataset, col, purge=purge, verbose=verbose)
+            continue
+
         #print(col + ', length = ' + str(len(dataset[col]))) # debugging
         #print(timecol + ', length = ' + str(len(dataset[timecol]))) #debugging
 
@@ -674,12 +682,7 @@ def cut_dataset(dataset_0, tspan=None, tspan_0=None, time_masks=None,
             #print('already got indeces, len = ' + str(len(indeces[timecol]))) #debugging
             mask = time_masks[timecol]
         else:
-            try:
-                t = dataset[timecol]
-            except KeyError:
-                print('can\'t cut ' + col + ' because dataset doesn\'t have timecol ' + timecol)
-                purge_column(dataset, col, purge=purge, verbose=verbose)
-                continue
+            t = dataset[timecol]
             mask = np.logical_and(tspan[0]<t, t<tspan[-1])
             # Don't cut off outer endpoints before evt interpolation (if used by plot_vs_potential)
             extra_left = np.append(mask[1:], False)
@@ -724,12 +727,28 @@ def offerquit():
         raise SystemExit
 
 def remove_nans(data):
+    filter_fun = np.isnan
+    return remove_filtered_values(data, filter_fun)
+
+def remove_negatives(data):
+    def filter_fun(x):
+        return x<0
+    return remove_filtered_values(data, filter_fun)
+
+def remove_filtered_values(data, filter_fun):
+    '''
+    The filter function has to take a np array and return a boolean numpy array
+    '''
     masks = {}
     # First loop will find all the nans
     for col in data['data_cols']:
         timecol = get_timecol(col, data)
         x = data[col]
-        mask = np.logical_not(np.isnan(x))
+        try:
+            mask = np.logical_not(filter_fun(x))
+        except TypeError:
+            print('Warning!!! Couldn\'t filter for col ' + col)
+            continue
         if timecol in masks:
             masks[timecol] = np.logical_and(masks[timecol], mask)
         else:
@@ -741,6 +760,8 @@ def remove_nans(data):
         #print('len(data[' + timecol + ']) = ' + str(len(data[timecol]))) # debugging
         mask = masks[timecol]
         data[col] = data[col][mask]
+
+    return data  # not necessary
 
 def rename_SI_cols(data, removenans=True):
     '''
@@ -949,38 +970,52 @@ def get_type(col, dataset=None):
                       ' Consider adding to EC_cols_0 in EC.py if so.')
     return 'EC' #'Xray' # to be refined later...
 
+
+def get_cols_for_mass(mass, dataset=None):
+    '''
+    Eventually this might make the 'rename_<format>_cols' functions obsolete.
+    '''
+    if dataset is None:
+        xcol, ycol = mass + '-x', mass + '-y'
+    elif 'mass_cols' in dataset:
+        xcol, ycol = dataset['mass_cols'][mass]
+    else:
+        ycol = mass + '-y'
+        xcol = get_timecol(ycol, dataset)
+    return xcol, ycol
+
 def get_timecol(col=None, dataset=None, data_type=None, verbose=False):
+    #print('getting timecol for ' + col + '. datset = ' + (str(dataset)+ 20*' ')[:20]) # debugging
     if dataset is not None and 'timecols' in dataset and col in dataset['timecols']:
-        timecol = dataset['timecols'][col]
+        return dataset['timecols'][col]
+
     if data_type is None:
         data_type = get_type(col, dataset)
+
     if data_type == 'EC':
-        timecol = 'time/s'
+        return 'time/s'
     elif data_type == 'MS':
         if col is None:
-            timecol = 'M32-x' # probably the least likely timecol to be missing from MS data
+            return 'M32-x' # probably the least likely timecol to be missing from MS data
         else:
-            timecol = col[:-2] + '-x'
+            return col[:-2] + '-x'
     elif data_type == 'SI':
-        timecol = col.split(' - ')[0] + ' - Time [s]'
+        return col.split(' - ')[0] + ' - Time [s]'
     elif data_type == 'RGA':
-        timecol = 'Time(s)'
+        return 'Time(s)'
     elif data_type == 'Xray':
-        timecol = 't' # to be refined later...
+        return 't' # to be refined later...
     elif data_type == 'CHI':
         if dataset is not None and 'Time/sec' in dataset:
-            timecol = 'Time/sec'
+            return 'Time/sec'
         else:
-            timecol = 'Time/s'
+            return 'Time/s'
     elif col[-2:] in ['-y', '-x']: # a timecol is its own timecol
-        timecol = col[:-2] + '-x' #for any data downloaded from cinfdata
+        return col[:-2] + '-x' #for any data downloaded from cinfdata
     else:
         print('couldn\'t get a timecol for ' + str(col) +
               '. data_type=' + str(data_type))
-        timecol = None
-    if verbose:
-        print('\'' + str(col) + '\' should correspond to timecol \'' + str(timecol) +'\'')
-    return timecol
+        return None
 
 def timestamp_to_seconds(timestamp):
     '''
