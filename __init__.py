@@ -24,6 +24,8 @@ from EC_MS.Datapoints import *
 from EC_MS.Potentiostat import *
 from EC_MS.dataset import *
 from EC_MS.PVMassSpec import *
+from EC_MS.Zilien import *
 from EC_MS.patches import *
+from EC_MS.spectra import *
 import EC_MS.Chem as Chem
 
